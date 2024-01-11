@@ -1,0 +1,92 @@
+From 7a4094d382e74aaed0a0b8356dc24d64952852f9 Mon Sep 17 00:00:00 2001
+From: Pavel Raiskup <praiskup@redhat.com>
+Date: Fri, 3 Jul 2020 12:32:58 +0200
+Subject: [PATCH] Extract: retain times for symlinks
+
+Original report by Pat Riehecky at
+https://bugzilla.redhat.com/1486364
+
+* src/copyin.c (copyin_device): Don't check for retain_time_flag
+global, it's done by set_file_times.
+(copyin_link): Call set_file_times to restore symlink times.
+* src/util.c (set_perms): Don't check for retain_time_flag global,
+done by set_file_times call.
+(set_file_times): Do nothing if retain_time_flag global is false.
+* src/copypass.c (process_copy_pass): Call set_file_times for
+symlinks.
+---
+ src/copyin.c   | 5 ++---
+ src/copypass.c | 2 ++
+ src/util.c     | 6 ++++--
+ 3 files changed, 8 insertions(+), 5 deletions(-)
+
+diff --git a/src/copyin.c b/src/copyin.c
+index 183b5b5..267ed4b 100644
+--- a/src/copyin.c
++++ b/src/copyin.c
+@@ -639,9 +639,7 @@ copyin_device (struct cpio_file_stat* file_hdr)
+   /* chown may have turned off some permissions we wanted. */
+   if (chmod (file_hdr->c_name, file_hdr->c_mode) < 0)
+     chmod_error_details (file_hdr->c_name, file_hdr->c_mode);
+-  if (retain_time_flag)
+-    set_file_times (-1, file_hdr->c_name, file_hdr->c_mtime,
+-		    file_hdr->c_mtime);
++  set_file_times (-1, file_hdr->c_name, file_hdr->c_mtime, file_hdr->c_mtime);
+ }
+ 
+ static void
+@@ -692,6 +690,7 @@ copyin_link (struct cpio_file_stat *file_hdr, int in_file_des)
+   	  && errno != EPERM)
+ 	chown_error_details (file_hdr->c_name, uid, gid);
+     }
++  set_file_times (-1, file_hdr->c_name, file_hdr->c_mtime, file_hdr->c_mtime);
+   free (link_name);
+ }
+ 
+diff --git a/src/copypass.c b/src/copypass.c
+index c5a9899..b4e7169 100644
+--- a/src/copypass.c
++++ b/src/copypass.c
+@@ -317,6 +317,8 @@ process_copy_pass ()
+ 		  && errno != EPERM)
+ 	        chown_error_details (output_name.ds_string, uid, gid);
+             }
++		  set_file_times (-1, output_name.ds_string,
++        				  in_file_stat.st_atime, in_file_stat.st_mtime);
+ 	  free (link_name);
+ 	}
+ #endif
+diff --git a/src/util.c b/src/util.c
+index 6ff6032..11f9c30 100644
+--- a/src/util.c
++++ b/src/util.c
+@@ -1389,7 +1389,6 @@ set_perms (int fd, struct cpio_file_stat *header)
+        we have to refer to it using name+ instead of name.  */
+     file_hdr->c_name [cdf_char] = '+';
+ #endif
+-  if (retain_time_flag)
+     set_file_times (fd, header->c_name, header->c_mtime, header->c_mtime);
+ }
+ 
+@@ -1398,6 +1397,8 @@ set_file_times (int fd,
+ 		const char *name, unsigned long atime, unsigned long mtime)
+ {
+   struct timespec ts[2];
++  if (!retain_time_flag)
++    return;
+   
+   memset (&ts, 0, sizeof ts);
+ 
+@@ -1406,7 +1407,8 @@ set_file_times (int fd,
+ 
+   /* Silently ignore EROFS because reading the file won't have upset its 
+      timestamp if it's on a read-only filesystem. */
+-  if (fdutimens (fd, name, ts) < 0 && errno != EROFS)
++  if ((fd >= 0 ? fdutimens (fd, NULL, ts) : lutimens (name, ts)) < 0
++      && errno != EROFS)
+     utime_error (name);
+ }
+ 
+-- 
+2.24.1
+
